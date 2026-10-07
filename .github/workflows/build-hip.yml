@@ -1,0 +1,112 @@
+name: Build HIP server (self-hosted, gfx1010)
+
+# Manual only: after a change is verified locally, trigger this from the Actions tab
+# (or `gh workflow run build-hip.yml`). It runs on a self-hosted Windows runner that
+# has the same ROCm 6.4 + MSVC 14.44 environment as the development machine, because
+# gfx1010 rocBLAS kernels + MSVC 14.44 are not available on GitHub-hosted runners.
+on:
+  workflow_dispatch:
+    inputs:
+      gpu_targets:
+        description: "Semicolon-separated GPU targets (e.g. gfx1010)"
+        default: "gfx1010"
+        required: false
+      rocm_path:
+        description: "ROCm install path on the runner (empty = auto-detect)"
+        default: ""
+        required: false
+      git_proxy:
+        description: "Optional HTTP(S) proxy used to fetch submodules"
+        default: ""
+        required: false
+      create_release:
+        description: "Create a GitHub Release with the built package"
+        type: boolean
+        default: true
+        required: false
+      draft_release:
+        description: "Create the release as a draft (review before publishing)"
+        type: boolean
+        default: true
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build + package
+    # The runner must be registered with all of these labels.
+    runs-on: [self-hosted, windows, x64, rocm-gfx1010]
+    timeout-minutes: 120
+
+    steps:
+      # Must run before checkout: the audio.cpp submodule's own submodule
+      # (audio.cpp-server-frontends) is declared with an SSH URL.
+      - name: Configure git for submodules (HTTPS + optional proxy)
+        shell: powershell
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          if ("${{ inputs.git_proxy }}" -ne "") {
+            git config --global http.proxy  "${{ inputs.git_proxy }}"
+            git config --global https.proxy "${{ inputs.git_proxy }}"
+          }
+
+      # audio.cpp is a pinned submodule; fetch-depth 0 keeps its tags so the version
+      # (nearest upstream tag) resolves.
+      - name: Checkout project (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Determine version (upstream audio.cpp nearest tag)
+        id: version
+        shell: powershell
+        run: |
+          $v = & git -C audio.cpp describe --tags --abbrev=0 2>$null
+          if (-not $v) { $v = "g" + (& git -C audio.cpp rev-parse --short HEAD) }
+          $v = ("$v").Trim()
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$v"
+          Write-Host "version=$v"
+          $global:LASTEXITCODE = 0
+
+      - name: Build and package
+        shell: powershell
+        run: |
+          $psArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\package_hip_gfx1010.ps1',
+                      '-GpuTargets','${{ inputs.gpu_targets }}','-Zip')
+          if ('${{ inputs.rocm_path }}' -ne '') { $psArgs += @('-RocmPath','${{ inputs.rocm_path }}') }
+          & powershell @psArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload package (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio.cpp-server-hip-gfx1010_${{ steps.version.outputs.version }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      # Uses the gh CLI (honours HTTP(S)_PROXY) instead of a JS action, because the
+      # asset upload to uploads.github.com must go through the proxy on this runner.
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HTTP_PROXY: ${{ inputs.git_proxy }}
+          HTTPS_PROXY: ${{ inputs.git_proxy }}
+        run: |
+          $gh  = if ($env:GH_EXE) { $env:GH_EXE } else { 'gh' }
+          $tag = '${{ steps.version.outputs.version }}'
+          $zip = (Get-ChildItem dist\*.zip | Select-Object -First 1).FullName
+          $draftFlag = @()
+          if ('${{ inputs.draft_release }}' -eq 'true') { $draftFlag = @('--draft') }
+          & $gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            & $gh release upload $tag $zip --clobber
+          } else {
+            & $gh release create $tag $zip --title "audio.cpp-server-hip-gfx1010_$tag" @draftFlag
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $global:LASTEXITCODE = 0

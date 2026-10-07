@@ -1,0 +1,21 @@
+本软件包（audiocpp_server 及其随附文件）包含以下第三方组件。
+
+1. audio.cpp
+   - 说明：音频模型推理引擎（本服务端基于其构建）
+   - 许可：Apache License 2.0
+   - 来源：https://github.com/0xShug0/audio.cpp
+   - 许可全文：LICENSES/Apache-2.0.txt
+
+2. ROCmLibs（gfx1010 定制 rocBLAS 文件）
+   - 文件：rocblas.dll、rocblas\library\* 等
+   - 说明：面向 Windows HIP SDK 的 gfx1010 rocBLAS 库文件（含 Tensile 内核）。
+     本包仅使用该仓库中与本 GPU 相关的部分文件，未作修改。
+   - 许可：GNU General Public License v3.0
+   - 来源：https://github.com/likelovewant/ROCmLibs-for-gfx1103-AMD780M-APU
+   - 许可全文：LICENSES/GPL-3.0.txt
+   - 对应源码：见上述来源仓库（Releases 中与 HIP SDK 6.4 对应版本）。
+
+3. AMD ROCm / HIP 运行时
+   - 文件：amdhip64_6.dll、amd_comgr_2.dll、hipblas.dll 等
+   - 来源：AMD HIP SDK / ROCm
+   - 许可：受 AMD 最终用户许可协议（EULA）约束，再分发须遵守 AMD 条款。
