@@ -140,6 +140,21 @@ if ($env:VCToolsVersion -notlike "$MsvcToolset*") { throw "vcvars did not select
 if (Test-Path -LiteralPath $ninjaDir) { $env:PATH = "$ninjaDir;$env:PATH" }
 if (-not (Get-Command ninja.exe -ErrorAction SilentlyContinue)) { throw "ninja.exe not found (looked on PATH and in $ninjaDir)." }
 
+# ----- upstream build fixes -----
+# audio.cpp v0.9.2 captures a structured binding in a lambda (a C++20 extension) while the
+# project compiles C++17 with -pedantic-errors. Unpack the pair so the capture is C++17-legal.
+$pf = Join-Path $Upstream "app\server\parallel_runtime.cpp"
+if (Test-Path -LiteralPath $pf) {
+    $txt = [System.IO.File]::ReadAllText($pf)
+    $fixedTxt = $txt.Replace(
+        'for (const auto & [id, model] : registered) {',
+        'for (const auto & entry : registered) { const std::string & id = entry.first; LoadedModel * model = entry.second;')
+    if ($fixedTxt -ne $txt) {
+        [System.IO.File]::WriteAllText($pf, $fixedTxt)
+        Write-Host "Applied C++17 build fix: app/server/parallel_runtime.cpp"
+    }
+}
+
 # ----- build -----
 if (-not $SkipBuild) {
     Write-Host "`n== Building audiocpp_server (HIP, $GpuTargets, rocBLAS path) =="

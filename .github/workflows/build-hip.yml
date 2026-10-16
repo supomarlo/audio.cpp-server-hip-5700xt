@@ -80,13 +80,6 @@ jobs:
           & powershell @psArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload package (workflow artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          name: audio.cpp-server-hip-gfx1010_${{ steps.version.outputs.version }}
-          path: dist/*.zip
-          if-no-files-found: error
-
       # Uses the gh CLI (honours HTTP(S)_PROXY) instead of a JS action, because the
       # asset upload to uploads.github.com must go through the proxy on this runner.
       - name: Create GitHub Release
@@ -102,11 +95,18 @@ jobs:
           $zip = (Get-ChildItem dist\*.zip | Select-Object -First 1).FullName
           $draftFlag = @()
           if ('${{ inputs.draft_release }}' -eq 'true') { $draftFlag = @('--draft') }
+          # gh writes "release not found" to stderr; don't let that abort the step under
+          # the runner's $ErrorActionPreference = 'Stop'.
+          $prevEap = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
           & $gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             & $gh release upload $tag $zip --clobber
+            $code = $LASTEXITCODE
           } else {
             & $gh release create $tag $zip --title "audio.cpp-server-hip-gfx1010_$tag" @draftFlag
+            $code = $LASTEXITCODE
           }
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ErrorActionPreference = $prevEap
+          if ($code -ne 0) { exit $code }
           $global:LASTEXITCODE = 0
