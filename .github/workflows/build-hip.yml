@@ -19,6 +19,10 @@ on:
         description: "Optional HTTP(S) proxy used to fetch submodules"
         default: ""
         required: false
+      version:
+        description: "Release version (no leading v), e.g. 0.10.0"
+        type: string
+        required: true
       create_release:
         description: "Create a GitHub Release with the built package"
         type: boolean
@@ -52,30 +56,32 @@ jobs:
             git config --global https.proxy "${{ inputs.git_proxy }}"
           }
 
-      # audio.cpp is a pinned submodule; fetch-depth 0 keeps its tags so the version
-      # (nearest upstream tag) resolves.
+      # audio.cpp is a pinned submodule; check it out recursively (pinned commit).
       - name: Checkout project (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Determine version (upstream audio.cpp nearest tag)
+      - name: Determine version
         id: version
         shell: powershell
         run: |
-          $v = & git -C audio.cpp describe --tags --abbrev=0 2>$null
-          if (-not $v) { $v = "g" + (& git -C audio.cpp rev-parse --short HEAD) }
-          $v = ("$v").Trim()
+          $v = '${{ inputs.version }}'.Trim()
+          if ($v -match '^v') { $v = $v.Substring(1) }
+          if ($v -eq "") { throw "A release version is required." }
+          $tag = "v$v"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$v"
-          Write-Host "version=$v"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "tag=$tag"
+          Write-Host "version=$v tag=$tag"
           $global:LASTEXITCODE = 0
 
       - name: Build and package
         shell: powershell
         run: |
           $psArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File','.\package_hip_gfx1010.ps1',
-                      '-GpuTargets','${{ inputs.gpu_targets }}','-Zip')
+                      '-GpuTargets','${{ inputs.gpu_targets }}','-Zip',
+                      '-Version','${{ steps.version.outputs.version }}')
           if ('${{ inputs.rocm_path }}' -ne '') { $psArgs += @('-RocmPath','${{ inputs.rocm_path }}') }
           & powershell @psArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -91,7 +97,7 @@ jobs:
           HTTPS_PROXY: ${{ inputs.git_proxy }}
         run: |
           $gh  = if ($env:GH_EXE) { $env:GH_EXE } else { 'gh' }
-          $tag = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
           $zip = (Get-ChildItem dist\*.zip | Select-Object -First 1).FullName
           $draftFlag = @()
           if ('${{ inputs.draft_release }}' -eq 'true') { $draftFlag = @('--draft') }

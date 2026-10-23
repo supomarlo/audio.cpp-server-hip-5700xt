@@ -21,10 +21,10 @@
 .PARAMETER GpuTargets
   Semicolon-separated gfx archs (default gfx1010 for the 5700 XT).
 .PARAMETER PackageName
-  Folder name created under ./dist. Defaults to audio.cpp-server-hip-gfx1010_<Version>.
+  Folder name created under ./dist. Defaults to audio.cpp-server-hip-gfx1010_<tag>.
 .PARAMETER Version
-  Version suffix for the artifact name. Defaults to the upstream audio.cpp nearest git tag
-  (e.g. v0.8.2-audio8-perf-hotfix).
+  Explicit version (no leading v), mirroring the upstream release workflow's `version` input. It is
+  embedded as AUDIOCPP_VERSION and, with a leading v, used for the artifact/release name. Empty = "dev".
 .PARAMETER MsvcToolset
   MSVC toolset version prefix required by ROCm HIP clang (default 14.44).
 .PARAMETER Jobs
@@ -87,18 +87,12 @@ $ModelSpecs  = Join-Path $Upstream "model_specs"
 $BuildBin    = Join-Path $Upstream "build\hip\bin"
 $DistDir     = Join-Path $ProjectRoot "dist"
 
-# Version (artifact name suffix): from -Version, else the upstream audio.cpp nearest git tag
-if ($Version -eq "") {
-    $desc = & git -C $Upstream describe --tags --abbrev=0 2>$null
-    if ($LASTEXITCODE -eq 0 -and $desc) {
-        $Version = ($desc | Select-Object -First 1).Trim()
-    } else {
-        $sha = & git -C $Upstream rev-parse --short HEAD 2>$null
-        if ($sha) { $Version = "g$(($sha | Select-Object -First 1).Trim())" }
-    }
-}
+# Version: explicit via -Version (mirrors the upstream release workflow's `version` input).
+# AUDIOCPP_VERSION drops a leading 'v'; the artifact/release tag keeps it.
+$Tag = ""
+if ($Version -ne "") { $Tag = if ($Version -match '^v') { $Version } else { "v$Version" } }
 if ($PackageName -eq "") {
-    $PackageName = if ($Version -ne "") { "audio.cpp-server-hip-gfx1010_$Version" } else { "audio.cpp-server-hip-gfx1010" }
+    $PackageName = if ($Tag) { "audio.cpp-server-hip-gfx1010_$Tag" } else { "audio.cpp-server-hip-gfx1010" }
 }
 $PackageDir  = Join-Path $DistDir $PackageName
 
@@ -155,6 +149,28 @@ if (Test-Path -LiteralPath $pf) {
     }
 }
 
+# The HIP build script lacks the -Version passthrough that build_windows.ps1 has, so add it
+# (idempotent) to embed AUDIOCPP_VERSION (-> `audiocpp_server --version`) into the binary.
+if (Test-Path -LiteralPath $BuildScript) {
+    $bs = [System.IO.File]::ReadAllText($BuildScript)
+    $nl = if ($bs.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $bs2 = $bs
+    if ($bs2 -notmatch '(?m)\[string\]\$Version') {
+        $bs2 = $bs2.Replace(
+            '    [string]$BuildType = "Release",',
+            "    [string]`$BuildType = `"Release`",$nl    [string]`$Version     = `"dev`",")
+    }
+    if ($bs2 -notmatch 'AUDIOCPP_VERSION=\$Version') {
+        $bs2 = $bs2.Replace(
+            '    "-DCMAKE_BUILD_TYPE=$BuildType",',
+            "    `"-DCMAKE_BUILD_TYPE=`$BuildType`",$nl    `"-DAUDIOCPP_VERSION=`$Version`",")
+    }
+    if ($bs2 -ne $bs) {
+        [System.IO.File]::WriteAllText($BuildScript, $bs2)
+        Write-Host "Patched scripts/build_windows_hip.ps1 to accept -Version"
+    }
+}
+
 # ----- build -----
 if (-not $SkipBuild) {
     Write-Host "`n== Building audiocpp_server (HIP, $GpuTargets, rocBLAS path) =="
@@ -167,6 +183,7 @@ if (-not $SkipBuild) {
         "-Jobs", $Jobs.ToString(),
         "-NoNativeCpu"
     )
+    if ($Version -ne "") { $buildArgs += @("-Version", $Version) }
     if (-not $NoEmbedModelSpecs) { $buildArgs += "-DeploymentBuild" }
     Invoke-Checked "powershell.exe" $buildArgs
 }
